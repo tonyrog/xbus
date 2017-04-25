@@ -1,0 +1,13 @@
+{application, xbus,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+		  tree_db
+                 ]},
+  {mod, { xbus_app, []}},
+  {env, []}
+ ]}.

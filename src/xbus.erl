@@ -19,19 +19,23 @@
 -export([write/2, write/3]).
 -export([write_p/2, write_p/3]).
 
--export([read/1, read_value/1, read_value_ts/1]).
--export([read_p/1, read_p_value/1, read_p_value_ts/1]).
+-export([read/1]).
+-export([read_p/1]).
 -export([read_n/3]).
--export([read_meta/1,read_meta/2,read_meta/3]).
+-export([read_meta/1]).
 
 -export([timestamp/0]).
 -export([show_topics/0]).
 -export([show_retained/0]).
 -export([show_q/1]).
+-export([datetime_us_from_timestamp/1]).
 
 -define(XBUS_SUBS,   xbus_subs).
 -define(XBUS_RETAIN, xbus_retain).
 -define(XBUS_SRV,    xbus_srv).
+
+%% system date
+-define(UNIX_SECONDS, 62167219200).
 
 -type key()         :: binary() | string().
 -type pattern_key() :: binary().
@@ -79,7 +83,7 @@ pub_(Topic, Value, TimeStamp) ->
 %% retain a queue of values
 %% a.b.c     will get the original value
 %% a.b.c.#   contains current retain position
-%% 
+%%
 retain_(Topic, Value, TimeStamp) ->
     Meta = read_meta(Topic),
     case retain(Meta) of
@@ -89,14 +93,14 @@ retain_(Topic, Value, TimeStamp) ->
 	    case persistent(Meta) of
 		true ->
 		    write_p(Topic,Value,TimeStamp);
-		false -> 
+		false ->
 		    true
 	    end,
 	    write(Topic,Value,TimeStamp);
 	R when R > 0 ->
 	    TopicC = <<Topic/binary,".#">>,
 	    I = tree_db_bin:update_counter(?XBUS_RETAIN, TopicC, 1),
-	    TopicI = join(Topic,I),
+	    TopicI = join(Topic,I rem R),
 	    case persistent(Meta) of
 		true ->
 		    write_p(TopicC, I),
@@ -114,7 +118,7 @@ retain_(Topic, Value, TimeStamp) ->
 %% FIXME: code must be added to handle update
 %%        of retain value. The easiest whould be
 %%        to delete all data and restart, but that
-%%        would be boring for persistent data... 
+%%        would be boring for persistent data...
 %%
 -spec pub_meta(Topic::key(), Data::[{atom(),term()}]) -> boolean().
 
@@ -156,7 +160,7 @@ sub(TopicPattern,Retained) when is_binary(TopicPattern), is_boolean(Retained) ->
     sub_(TopicPattern,Retained);
 sub(TopicPattern,Retained) when is_list(TopicPattern), is_boolean(Retained) ->
     sub_(list_to_binary(TopicPattern),Retained).
-    
+
 sub_(TopicPattern,Retained) ->
     retained(TopicPattern,Retained),
     true = tree_db_bin:subscribe(?XBUS_SUBS, TopicPattern, self()),
@@ -219,7 +223,7 @@ unsub_meta(TopicPattern) when is_list(TopicPattern) ->
 
 write(Topic, Value) ->
     write(Topic, Value, ?timestamp()).
-    
+
 -spec write(Topic::key(), Value::term(),TimeStamp::integer()) -> true.
 
 write(Topic, Value, TimeStamp) when is_integer(TimeStamp) ->
@@ -232,7 +236,7 @@ write(Topic, Value, TimeStamp) when is_integer(TimeStamp) ->
 
 write_p(Topic, Value) ->
     write_p(Topic, Value, ?timestamp()).
-    
+
 -spec write_p(Topic::key(), Value::term(),TimeStamp::integer()) -> true.
 
 write_p(Topic, Value, TimeStamp) when is_integer(TimeStamp) ->
@@ -242,92 +246,74 @@ write_p(Topic, Value, TimeStamp) when is_integer(TimeStamp) ->
 %%
 %% Read retain values
 %%
--spec read_p(Topic::key()) -> [{key(),term()}].
+-spec read_p(Topic::key()) -> [{key(),term(),timestamp()}].
 
 read_p(Topic) ->
-    [{Key,Value,_}]=dets:lookup(?XBUS_RETAIN, tree_db_bin:internal_key(Topic)),
-    [{tree_db_bin:external_key(Key),Value}].
-
--spec read_p_value(Topic::key()) -> term().
-
-read_p_value(Topic) ->
-    [{_,Value,_}] = dets:lookup(?XBUS_RETAIN, tree_db_bin:internal_key(Topic)),
-    Value.
-
--spec read_p_value_ts(Topic::key()) -> {term(), timestamp()}.
-
-read_p_value_ts(Topic) ->
-    [{_,Value,Ts}] = dets:lookup(?XBUS_RETAIN, tree_db_bin:internal_key(Topic)),
-    {Value,Ts}.
+    [{tree_db_bin:external_key(K),V,T} ||
+	{K,V,T} <- dets:lookup(?XBUS_RETAIN, tree_db_bin:internal_key(Topic))].
 
 %%
 %% Read retain values
 %%
--spec read(Topic::key()) -> [{key(),term()}].
+-spec read(Topic::key()) -> [{key(),term(),timestamp()}].
 
 read(Topic) ->
-    tree_db_bin:lookup(?XBUS_RETAIN, Topic).
-
--spec read_value(Topic::key()) -> term().
-
-read_value(Topic) ->
-    tree_db_bin:get(?XBUS_RETAIN, Topic).
-
--spec read_value_ts(Topic::key()) -> {term(), timestamp()}.
-
-read_value_ts(Topic) ->
-    tree_db_bin:get_ts(?XBUS_RETAIN, Topic).
+    [{tree_db_bin:external_key(K),V,T} ||
+	{K,V,T} <- tree_db_bin:lookup_ts(?XBUS_RETAIN, Topic)].
 
 %%
 %% Read n elements >= timestamp()
 %%
-read_n(Topic, N, TimeStamp) when is_binary(Topic),
-				 is_integer(N), N>0,
-				 is_integer(TimeStamp) ->
-    case tree_db_bin:lookup_ts(?XBUS_RETAIN, <<Topic/binary,".#">>) of
-	[] -> 
+read_n(Topic, N, TimeStamp) when is_list(Topic), is_integer(N), N>0 ->
+    read_n_(list_to_binary(Topic), N, cvt_timestamp(TimeStamp));
+read_n(Topic, N, TimeStamp) when is_binary(Topic), is_integer(N), N>0 ->
+    read_n_(Topic, N, cvt_timestamp(TimeStamp)).
+
+read_n_(Topic, N, TimeStamp) ->
+    case read(<<Topic/binary,".#">>) of
+	[] ->
 	    [];
 	[{_,Pos,_}] ->
 	    Meta = read_meta(Topic),
 	    case retain(Meta) of
-		0 -> ok;
+		0 ->
+		    [];
 		R when Pos < R ->
 		    %% available values are 0..Pos
 		    %% binary search for Timetamp in range 0..Pos
 		    BPos = bin_search_pos(Topic, TimeStamp, 0, Pos, R),
-		    read_n_(Topic, N, TimeStamp, BPos, R);
+		    read_loop_n_(Topic, N, TimeStamp, BPos, R);
 		R when Pos >= R ->
 		    %% values are in Pos+1..Pos+R-1 (mod R)
-		    BPos = bin_search_pos(Topic, TimeStamp, Pos+1, Pos+R-1, R),
-		    read_n_(Topic, N, TimeStamp, BPos, R)
+		    BPos = bin_search_pos(Topic, TimeStamp, Pos+1, Pos+R, R),
+		    read_loop_n_(Topic, N, TimeStamp, BPos, R)
 	    end
     end.
 
-read_n_(Topic, N, TimeStamp, {true,I}, R) ->
-    read_n__(Topic, N, TimeStamp, I, R, []);
-read_n_(Topic, N, TimeStamp, {false,I}, R) ->
-    read_n__(Topic, N, TimeStamp, I, R, []).
+read_loop_n_(Topic, N, TimeStamp, {true,I}, R) ->
+    read_loop_n__(Topic, N, TimeStamp, I, R, []);
+read_loop_n_(Topic, N, TimeStamp, {false,I}, R) ->
+    read_loop_n__(Topic, N, TimeStamp, I, R, []).
 
-read_n__(_Topic, 0, _TimeStamp, _Pos, _R, Acc) ->
+read_loop_n__(_Topic, 0, _TimeStamp, _Pos, _R, Acc) ->
     lists:reverse(Acc);
-read_n__(Topic, I, TimeStamp, Pos, R, Acc) ->
-    case tree_db_bin:lookup_ts(?XBUS_RETAIN, join(Topic,Pos rem R)) of
-	[{Key,Value,TimeStamp1}] when TimeStamp1 >= TimeStamp ->
-	    read_n__(Topic,I-1,TimeStamp,Pos+1,R,[{Key,Value,TimeStamp1}|Acc]);
+read_loop_n__(Topic, I, TimeStamp, Pos, R, Acc) ->
+    case read(join(Topic,Pos rem R)) of
+	[E={_Key,_Value,TimeStamp1}] when TimeStamp1 >= TimeStamp ->
+	    read_loop_n__(Topic,I-1,TimeStamp,Pos+1,R,[E|Acc]);
 	[_] ->
 	    lists:reverse(Acc)
     end.
 
 %%
-%% Search for Element with Timestamp >= TimeStamp 
+%% Search for Element with Timestamp >= TimeStamp
 %%
 
 bin_search_pos(_Topic, _TimeStamp, Low, High, N) when Low > High ->
     {false,Low rem N};
 bin_search_pos(Topic, TimeStamp, Low, High, N) ->
     Mid = (Low + High) div 2,
-    [{_,_,TimeStamp1}] = tree_db_bin:lookup_ts(?XBUS_RETAIN, 
-					       join(Topic,Mid rem N)),
+    [{_,_,TimeStamp1}] = read(join(Topic,Mid rem N)),
     if TimeStamp < TimeStamp1 ->
 	    bin_search_pos(Topic, TimeStamp, Low, Mid-1, N);
        TimeStamp > TimeStamp1 ->
@@ -335,23 +321,15 @@ bin_search_pos(Topic, TimeStamp, Low, High, N) ->
        true ->
 	    {true,Mid rem N}
     end.
-    
 
 -spec read_meta(Topic::key()) -> [{atom(),term()}].
+read_meta(Topic) when is_list(Topic) ->
+    read_meta(list_to_binary(Topic));
 read_meta(Topic) ->
-    case tree_db_bin:lookup(?XBUS_RETAIN, <<"{META}.",Topic/binary>>) of
+    case read(<<"{META}.",Topic/binary>>) of
 	[] -> [];
-	[{_,Meta}] -> Meta
+	[{_,Meta,_Ts}] -> Meta
     end.
-
--spec read_meta(Topic::key(),Key::atom()) -> term() | undefined.
-read_meta(Topic,Key) ->
-    read_meta(Topic,Key,undefined).
-
--spec read_meta(Topic::key(),Key::atom(),Default::term()) -> term().
-read_meta(Topic,Key,Default) ->
-    Meta = read_meta(Topic),
-    meta_value(Key, Meta, Default).
 
 persistent(Meta) ->
     meta_value(persistent, Meta, false).
@@ -381,20 +359,26 @@ show_retained() ->
 	      Topic1 = tree_db_bin:external_key(Topic),
 	      case read(Topic1) of
 		  [] -> ok;
-		  [{_,Value}] ->
+		  [{_,Value,_Ts}] ->
 		      Unit = meta_value(unit,Meta,""),
 		      io:format("~p  ~w~s\n", [Topic1,Value,Unit])
 	      end
       end, ok).
 
-join(Topic, I) when is_binary(Topic), is_integer(I), I>0 ->
+join(Topic, I) when is_binary(Topic), is_integer(I), I>=0 ->
     <<Topic/binary,$.,(integer_to_binary(I))/binary>>.
+
+cvt_timestamp(TimeStamp={_Date,_Time}) ->
+    S = calendar:datetime_to_gregorian_seconds(TimeStamp),
+    (S-?UNIX_SECONDS)*1000000;
+cvt_timestamp({Date,Time,Us}) ->
+    S = calendar:datetime_to_gregorian_seconds({Date,Time}),
+    (S-?UNIX_SECONDS)*1000000+Us;
+cvt_timestamp(TimeStamp) when is_integer(TimeStamp), TimeStamp>=0 ->
+    TimeStamp.
 
 timestamp() ->
     ?timestamp().
-
-%% system date
--define(UNIX_SECONDS, 62167219200).
 
 %% Timestamps are in micro seconds (pretend in unix time for now)
 datetime_us_from_timestamp(Timestamp) ->
@@ -408,11 +392,12 @@ datetime_us_from_timestamp(Timestamp) ->
 %%
 %% Show queue values
 %%
-
+show_q(Topic) when is_list(Topic) ->
+    show_q(list_to_binary(Topic));
 show_q(Topic) ->
     case read(<<Topic/binary,".#">>) of
 	[] -> ok;
-	[{_,Pos}] ->
+	[{_,Pos,_Ts}] ->
 	    Meta = read_meta(Topic),
 	    case retain(Meta) of
 		0 ->
@@ -420,27 +405,29 @@ show_q(Topic) ->
 		1 ->
 		    show_value(Topic);
 		R when Pos < R ->
-		    lists:foreach(
-		      fun(J) ->
-			      show_value(Topic, J)
-		      end, lists:seq(0, Pos));
+		    show_values_(Topic, 0, Pos, R);
 		R when Pos >= R ->
-		    lists:foreach(
-		      fun(J) ->
-			      show_value(Topic, J)
-		      end, lists:seq(0, R-1))
+		    show_values_(Topic, Pos+1, Pos+R, R)
 	    end
     end.
 
+show_values_(Topic, J, N, R) ->
+    if J =< N ->
+	    show_value(Topic, J rem R),
+	    show_values_(Topic, J+1, N, R);
+       true ->
+	    ok
+    end.
+
 show_value(Topic) ->
-    {Value,Ts} = read_value_ts(Topic),
+    [{_,Value,Ts}] = read(Topic),
     {{Y,M,D},{TH,TM,TS},Micro} = datetime_us_from_timestamp(Ts),
     io:format("~s = ~w [" ?DATE_FORMAT "]\n",
 	      [Topic, Value,
 	       Y,M,D,TH,TM,TS,Micro]).
 
 show_value(Topic, I) ->
-    {Value,Ts} = read_value_ts(join(Topic,I)),
+    [{_,Value,Ts}] = read(join(Topic,I)),
     {{Y,M,D},{TH,TM,TS},Micro} = datetime_us_from_timestamp(Ts),
     io:format("~s.~w = ~w [" ?DATE_FORMAT "]\n",
 	      [Topic, I, Value,

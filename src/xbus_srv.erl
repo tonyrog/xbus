@@ -62,6 +62,7 @@ init([]) ->
     tree_db_bin:new(?XBUS_RETAIN),
     MRef = ets:new(xbus_mref, [set]),
     TRef = ets:new(xbus_tref, [bag]),
+    init_persistent(application:get_env(xbus, persistent)),
     %% Always "retain" meta information if declared
     case application:get_env(xbus, topics) of
 	{ok,List} ->
@@ -74,6 +75,18 @@ init([]) ->
 	    ok
     end,
     {ok, #state{ mref = MRef, tref = TRef }}.
+
+init_persistent({ok,true}) ->
+    case application:get_env(xbus, file) of
+	{ok,File} ->
+	    dets:open_file(?XBUS_RETAIN, [{access,read_write},{file,File}]),
+	    dets:to_ets(?XBUS_RETAIN, ?XBUS_RETAIN);
+	undefined ->
+	    dets:open_file(?XBUS_RETAIN, [{access,read_write}]),
+	    dets:to_ets(?XBUS_RETAIN, ?XBUS_RETAIN)
+    end;
+init_persistent(_) ->
+    ok.
 
 %%--------------------------------------------------------------------
 %% @private
@@ -130,8 +143,8 @@ handle_cast(_Msg, State) ->
 %% @end
 %%--------------------------------------------------------------------
 
-handle_info({'DOWN',Mon,process,Pid,Reason}, State) ->
-    io:format("process ~p died, cleaning up, reason ~p\n", [Pid,Reason]),
+handle_info({'DOWN',Mon,process,Pid,_Reason}, State) ->
+    %% io:format("process ~p died, cleaning up, reason ~p\n", [Pid,_Reason]),
     case ets:lookup(State#state.mref, Mon) of
 	[{_, {TopicPattern,Pid}}] ->
 	    %% clean up subscription

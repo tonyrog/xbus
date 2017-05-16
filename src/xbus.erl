@@ -84,6 +84,8 @@ pub_(Topic, Value, TimeStamp) ->
 %% a.b.c     will get the original value
 %% a.b.c.#   contains current retain position
 %%
+retain_(MetaTopic= <<"{META}.",_/binary>>, Value, TimeStamp) ->
+    write(MetaTopic,Value,TimeStamp);    
 retain_(Topic, Value, TimeStamp) ->
     Meta = read_meta(Topic),
     case retain(Meta) of

@@ -17,7 +17,7 @@ Subscribe to messages sent by calling pub. For example
     > xbus:sub("xbus.*.message").
     > xbus:pub("xbus.a.message", "Hello").
     > flush().
-    Shell got {xbus,<<"xbus.*.message">>,<<"xbus.a.message">>,
+    Shell got {xbus,<<"xbus.*.message">>,
                 #{timestamp => 1494846399372848,
                   topic => <<"xbus.a.message">>,
                   value => "Hello"}}
@@ -26,13 +26,14 @@ Note that the pattern key is always reported as binary.
 
 ### xbus:unsub(Topic::pattern_key()) -> boolean()
 
-Remove a subscription
+Remove a subscription. If the same process has several subscriptions
+under the same pattern, all are removed.
 
 ### xbus:pub(Topic::key(), Value::term() [, TimeStamp::integer()]) -> true
 
 Broadcast a message on the message bus.
 
-    > xbus:pub("xbus.an.example", [{value,99},{unit,"%"}]).
+    > xbus:pub("a.topic", 99).
 
 An optional time stamp maybe supplied, and should in this case be
 xbus:timestamp() or tree_db_bin:timestamp() which is in unix micro seconds.
@@ -43,7 +44,7 @@ pub_meta will publish (and retain) meta information under the
 meta topic <<"{META}.a.topic">>. It is also possible to
 subscribe to <<"{META}.*">> (use sub_meta) to detect declared channels.
 
-    > xbus:pub_meta("a.topic", [{comment,"A comment"},{unit,"mph"}]).
+    > xbus:pub_meta("a.topic", [{comment,"A comment"},{unit,"%"}]).
 
 The meta {persistent, true} will declare that the topic values
 are stored in persistent storage. A sys.config is needed to
@@ -71,7 +72,7 @@ one, number of components respectivly. The patterns must replace
 a complete component and can not match inside components, so
 *a*.b is not a topic pattern but a.*.b is.
 
-Meta information is stored in the "{META}" subtree.
+Meta information is stored in the "{META}" sub tree.
 The meta information for topic "a.b.c" may be
 "{META}.a.b.c", [{unit,"m/s"},{retain,100},{persistent,true}].
 Special topic is also "a.b.c.#" which is the current position when
@@ -84,9 +85,9 @@ the normal topic, "a.b.c" in this case.
     {xbus,
        [%% declare meta information about initial topics
         {persistent, false},   %% default is not to store (using dets)
-	{file, "xbus_retain"}, %% default filename if persistent is used
+        {file, "xbus_retain"}, %% default filename if persistent is used
         {topics,[
-           {<<"sensor.1.temperature">>, [{unit,"C"},{persist,true},{retain,100}]},
+           {<<"sensor.1.temperature">>, [{unit,"C"},{persistent,true},{retain,100}]},
            {<<"sensor.2.motion">>, [{unit,"boolean"}]}
 	]}]}.
 

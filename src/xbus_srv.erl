@@ -67,9 +67,8 @@ init([]) ->
     case application:get_env(xbus, topics) of
 	{ok,List} ->
 	    lists:foreach(
-	      fun({Topic,Desription}) ->
-		      MetaTopic = <<"{META}.", Topic/binary>>,
-		      tree_db_bin:insert(?XBUS_RETAIN, {MetaTopic,Desription})
+	      fun({Topic,Meta}) ->
+		      xbus:pub_meta(Topic, Meta)
 	      end, List);
 	undefined ->
 	    ok

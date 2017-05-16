@@ -122,29 +122,29 @@ retain_(Topic, Value, TimeStamp) ->
 %%
 -spec pub_meta(Topic::key(), Data::[{atom(),term()}]) -> boolean().
 
-pub_meta(Topic, Data) when is_binary(Topic) ->
-    pub_meta_(Topic, Data);
-pub_meta(Topic, Data) when is_list(Topic) ->
-    pub_meta_(list_to_binary(Topic), Data).
+pub_meta(Topic, Meta) when is_binary(Topic) ->
+    pub_meta_(Topic, Meta);
+pub_meta(Topic, Meta) when is_list(Topic) ->
+    pub_meta_(list_to_binary(Topic), Meta).
 
-pub_meta_(Topic, Data) when is_binary(Topic) ->
+pub_meta_(Topic, Meta) when is_binary(Topic) ->
     MetaTopic = <<"{META}.", Topic/binary>>,
     TimeStamp = ?timestamp(),
-    case retain(Data) of
+    case retain(Meta) of
 	0 ->
 	    ok;
 	_ ->
 	    TopicC = <<Topic/binary,".#">>,
 	    write(TopicC, -1, TimeStamp),
-	    case persistent(Data) of
+	    case persistent(Meta) of
 		true ->
 		    write_p(TopicC, -1, TimeStamp),
-		    write_p(MetaTopic, Data, TimeStamp);
+		    write_p(MetaTopic, Meta, TimeStamp);
 		false ->
 		    true
 	    end
     end,
-    pub_(MetaTopic, Data, TimeStamp).
+    pub_(MetaTopic, Meta, TimeStamp).
 
 %% subscribe to a topic, Topic may contain components with * or ?
 %% also match any retained values
@@ -174,11 +174,9 @@ sub_meta(TopicPattern) when is_list(TopicPattern) ->
 
 %% Filter retained values with TopicPattern to get the current values
 retained(TopicPattern,true) ->
-    tree_db_bin:fold_matching(
+    tree_db_bin:fold_matching_ts(
       ?XBUS_RETAIN, TopicPattern,
-      fun({Topic,Value},_Acc) ->
-	      %% FIXME: make fold_matching return timetamp as well
-	      {_Value,TimeStamp} = tree_db_bin:get_ts(?XBUS_RETAIN,Topic),
+      fun({Topic,Value,TimeStamp},_Acc) ->
 	      self() ! {xbus,TopicPattern,
 			#{ topic=>tree_db_bin:external_key(Topic),
 			   value=>Value,

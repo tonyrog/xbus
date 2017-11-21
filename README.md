@@ -85,7 +85,7 @@ the normal topic, "a.b.c" in this case.
     {xbus,
        [%% declare meta information about initial topics
         {persistent, false},   %% default is not to store (using dets)
-        {file, "xbus_retain"}, %% default filename if persistent is used
+        {file, "xbus_retain"}, %% default filename for persistence, if used.
         {topics,[
            {<<"sensor.1.temperature">>, [{unit,"C"},{persistent,true},{retain,100}]},
            {<<"sensor.2.motion">>, [{unit,"boolean"}]}

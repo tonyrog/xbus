@@ -12,6 +12,7 @@
 
 -define(XBUS_SUBS,   xbus_subs).
 -define(XBUS_RETAIN, xbus_retain).
+-define(XBUS_ACK,    xbus_ack).
 
 %% API
 -export([start_link/0]).
@@ -60,6 +61,7 @@ start_link() ->
 init([]) ->
     tree_db_bin:new(?XBUS_SUBS),
     tree_db_bin:new(?XBUS_RETAIN),
+    ets:new(?XBUS_ACK, [public, named_table]),
     MRef = ets:new(xbus_mref, [set]),
     TRef = ets:new(xbus_tref, [bag]),
     init_persistent(application:get_env(xbus, persistent)),
@@ -127,6 +129,7 @@ handle_cast({demonitor,TopicPattern,Pid}, State) ->
 	      ets:delete(State#state.mref, Mon),
 	      ets:delete_object(State#state.tref, {{TopicPattern,Pid},Mon})
       end, ets:lookup(State#state.tref, {TopicPattern,Pid})),
+    ets:delete(?XBUS_ACK, {TopicPattern,Pid}),
     {noreply, State};
 handle_cast(_Msg, State) ->
     {noreply, State}.
@@ -149,7 +152,8 @@ handle_info({'DOWN',Mon,process,Pid,_Reason}, State) ->
 	    %% clean up subscription
 	    tree_db_bin:unsubscribe(?XBUS_SUBS, TopicPattern, Pid),
 	    ets:delete_object(State#state.tref, {{TopicPattern,Pid},Mon}),
-	    ets:delete(State#state.mref, Mon);
+	    ets:delete(State#state.mref, Mon),
+	    ets:delete(?XBUS_ACK, {TopicPattern,Pid});
 	[] ->
 	    %% already deleted
 	    ok

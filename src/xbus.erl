@@ -10,6 +10,8 @@
 -export([start/0]).
 -export([pub/2, pub/3]).
 -export([sub/1, sub/2]).
+-export([sub_ack/1, sub_ack/2]).
+-export([ack/1, ack/2]).
 -export([unsub/1]).
 
 -export([pub_meta/2]).
@@ -29,9 +31,11 @@
 -export([show_retained/0]).
 -export([show_q/1]).
 -export([datetime_us_from_timestamp/1]).
+-export([send_retained/2]).
 
 -define(XBUS_SUBS,   xbus_subs).
 -define(XBUS_RETAIN, xbus_retain).
+-define(XBUS_ACK,    xbus_ack).
 -define(XBUS_SRV,    xbus_srv).
 
 %% system date
@@ -72,10 +76,16 @@ pub_(Topic, Value, TimeStamp) ->
     retain_(Topic, Value, TimeStamp),
     tree_db_bin:fold_subscriptions(
       fun(TopicPattern,Pid,_PatternTimeStamp,Acc) ->
-	      Pid ! {xbus,tree_db_bin:external_key(TopicPattern),
-		     #{ topic=>Topic,
-			value=>Value,
-			timestamp=>TimeStamp}},
+	      XTopicPattern = tree_db_bin:external_key(TopicPattern),
+	      case is_ack(Pid,XTopicPattern, TimeStamp) of
+		  true ->
+		      Pid ! {xbus,XTopicPattern,
+			     #{ topic=>Topic,
+				value=>Value,
+				timestamp=>TimeStamp}};
+		  false ->
+		      ignore
+	      end,
 	      Acc
       end, true, ?XBUS_SUBS, Topic).
 
@@ -157,14 +167,34 @@ sub(TopicPattern) when is_list(TopicPattern) ->
     sub_(list_to_binary(TopicPattern),true).
 
 -spec sub(TopicPattern::pattern_key(),Retained::boolean()) -> boolean().
-
 sub(TopicPattern,Retained) when is_binary(TopicPattern), is_boolean(Retained) ->
     sub_(TopicPattern,Retained);
 sub(TopicPattern,Retained) when is_list(TopicPattern), is_boolean(Retained) ->
     sub_(list_to_binary(TopicPattern),Retained).
 
+%% subscribe to a topic, Topic may contain components with * or ?
+%% also match any retained values, require ack before next value is sent
+-spec sub_ack(TopicPattern::pattern_key()) -> boolean().
+sub_ack(TopicPattern) when is_binary(TopicPattern) ->
+    sub_ack_(TopicPattern,true);
+sub_ack(TopicPattern) when is_list(TopicPattern) ->
+    sub_ack_(list_to_binary(TopicPattern),true).
+
+-spec sub_ack(TopicPattern::pattern_key(),Retained::boolean()) -> boolean().
+
+sub_ack(TopicPattern,Retained) when is_binary(TopicPattern),
+				    is_boolean(Retained) ->
+    sub_ack_(TopicPattern,Retained);
+sub_ack(TopicPattern,Retained) when is_list(TopicPattern),
+				    is_boolean(Retained) ->
+    sub_ack_(list_to_binary(TopicPattern),Retained).
+
+sub_ack_(TopicPattern,Retained) ->
+    ets:insert(?XBUS_ACK, {{TopicPattern,self()},0,timestamp()}),
+    sub_(TopicPattern,Retained).
+
 sub_(TopicPattern,Retained) ->
-    retained(TopicPattern,Retained),
+    retained_(self(),TopicPattern,Retained),
     true = tree_db_bin:subscribe(?XBUS_SUBS, TopicPattern, self()),
     gen_server:cast(?XBUS_SRV, {monitor,TopicPattern, self()}),
     true.
@@ -175,18 +205,29 @@ sub_meta(TopicPattern) when is_list(TopicPattern) ->
     sub_(list_to_binary(["{META}.",TopicPattern]), true).
 
 %% Filter retained values with TopicPattern to get the current values
-retained(TopicPattern,true) ->
+retained_(Pid,TopicPattern,true) ->
+    case ets:lookup(?XBUS_ACK, {TopicPattern,Pid}) of
+	[] ->
+	    send_retained(Pid,TopicPattern);
+	[{_,0,_}] ->
+	    send_retained(Pid,TopicPattern);
+	[_] ->
+	    true
+    end;
+retained_(_Pid,_TopicPattern,false) ->
+    true.
+
+send_retained(Pid,TopicPattern) ->
     tree_db_bin:fold_matching_ts(
       ?XBUS_RETAIN, TopicPattern,
       fun({Topic,Value,TimeStamp},_Acc) ->
-	      self() ! {xbus,TopicPattern,
-			#{ topic=>tree_db_bin:external_key(Topic),
-			   value=>Value,
-			   timestamp=>TimeStamp}},
+	      Pid ! {xbus,TopicPattern,
+		     #{ topic=>tree_db_bin:external_key(Topic),
+			value=>Value,
+			timestamp=>TimeStamp}},
 	      true
-      end, true);
-retained(_TopicPattern,false) ->
-    true.
+      end, true).
+
 %%
 %% remove subscription
 %%
@@ -215,6 +256,39 @@ unsub_meta(TopicPattern) when is_binary(TopicPattern) ->
     unsub_(<<"{META}.",TopicPattern/binary>>);
 unsub_meta(TopicPattern) when is_list(TopicPattern) ->
     unsub_(list_to_binary(["{META}.",TopicPattern])).
+
+%% Check if topic is acknowledged {Key, AckCount, PubCount}.
+is_ack(Pid, TopicPattern, TimeStamp) ->
+    try ets:update_counter(?XBUS_ACK,{TopicPattern,Pid},{2,1}) of
+	1 -> 
+	    ets:update_counter(?XBUS_ACK,{TopicPattern,Pid},
+			       {3,0,0,TimeStamp}),
+	    true;
+	_ -> false
+    catch
+	_:_ -> true
+    end.
+
+%% acknowledge topic and send retained values if needed
+ack(TopicPattern) when is_binary(TopicPattern) ->
+    ack_(self(),TopicPattern);
+ack(TopicPattern) when is_list(TopicPattern) ->
+    ack_(self(),list_to_binary(TopicPattern)).
+
+ack(Pid,TopicPattern)  when is_pid(Pid), is_binary(TopicPattern) ->
+    ack_(Pid,TopicPattern);
+ack(Pid,TopicPattern)  when is_pid(Pid), is_list(TopicPattern) ->
+    ack_(Pid,list_to_binary(TopicPattern)).
+
+ack_(Pid, TopicPattern) ->
+    try ets:update_counter(?XBUS_ACK,{TopicPattern,Pid},[{2,0},{2,0,0,0}]) of
+	[0,_] -> ok;
+	[_Pub,_] ->
+	    send_retained(Pid,TopicPattern),
+	    ok
+    catch
+	_:_ -> ok
+    end.
 
 %%
 %% Raw write retained values

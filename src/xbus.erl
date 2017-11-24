@@ -27,8 +27,8 @@
 -export([read_meta/1]).
 
 -export([timestamp/0]).
--export([show_topics/0]).
--export([show_retained/0]).
+-export([topics/0, topics/1, show_topics/0, show_topics/1]).
+-export([retained/0, retained/1, show_retained/0, show_retained/1]).
 -export([show_q/1]).
 -export([datetime_us_from_timestamp/1]).
 -export([send_retained/2]).
@@ -396,6 +396,9 @@ bin_search_pos(Topic, TimeStamp, Low, High, N) ->
 	    {true,Mid rem N}
     end.
 
+join(Topic, I) when is_binary(Topic), is_integer(I), I>=0 ->
+    <<Topic/binary,$.,(integer_to_binary(I))/binary>>.
+
 -spec read_meta(Topic::key()) -> [{atom(),term()}].
 read_meta(Topic) when is_list(Topic) ->
     read_meta(list_to_binary(Topic));
@@ -416,31 +419,62 @@ meta_value(Key, Meta, Default) when is_list(Meta) ->
 meta_value(Key, Meta, Default) when is_map(Meta) ->
     maps:get(Key, Meta, Default).
 
-%% show local topics
-show_topics() ->
+%% Get all topcs
+topics() ->
+    topics("*").
+
+topics(TopicPattern) ->
+    BinPattern = iolist_to_binary(TopicPattern),
     tree_db_bin:fold_matching(
-      ?XBUS_RETAIN, <<"{META}.*">>,
-      fun({[<<"{META}">>|Topic],Meta},_Acc) ->
-	      io:format("~p  meta=~p\n", [tree_db_bin:external_key(Topic),
-					  Meta])
-      end, ok).
+      ?XBUS_RETAIN, <<"{META}.",BinPattern/binary>>,
+      fun({[<<"{META}">>|Topic],Meta},Acc) ->
+	      [{tree_db_bin:external_key(Topic),Meta}|Acc]
+      end, []).
+
+%% show local topics
+show_topics() -> 
+    show_topics("*").
+    
+show_topics(TopicPattern) ->
+    lists:foreach(
+      fun({Topic,Meta}) ->
+	      io:format("~p  meta=~p\n", [Topic,Meta])
+      end, topics(TopicPattern)).
+
+%% Get a list of retained values
+retained() ->
+    retained("*").
+
+retained(TopicPattern) ->
+    lists:foldl(
+      fun({Topic,Meta},Acc) ->
+	      case read(Topic) of
+		  [] ->
+		      Acc;
+		  [{_,Value,Ts}] ->
+		      [{Topic,Value,[{timestamp,Ts}|Meta]}|Acc]
+	      end
+      end, [], topics(TopicPattern)).
 
 %% Show retained data that has meta data, fixme show all data
-show_retained() ->
-    tree_db_bin:fold_matching(
-      ?XBUS_RETAIN, <<"{META}.*">>,
-      fun({[<<"{META}">>|Topic],Meta},_Acc) ->
-	      Topic1 = tree_db_bin:external_key(Topic),
-	      case read(Topic1) of
-		  [] -> ok;
-		  [{_,Value,_Ts}] ->
-		      Unit = meta_value(unit,Meta,""),
-		      io:format("~p  ~w~s\n", [Topic1,Value,Unit])
-	      end
-      end, ok).
 
-join(Topic, I) when is_binary(Topic), is_integer(I), I>=0 ->
-    <<Topic/binary,$.,(integer_to_binary(I))/binary>>.
+show_retained() ->
+    show_retained("*").
+
+show_retained(TopicPattern) ->
+    lists:foreach(
+      fun({Topic,Value,Info}) ->
+	      Unit = meta_value(unit,Info,""),
+	      io:format("~p  ~w~s\n", [Topic,Value,Unit])
+      end, retained(TopicPattern)).
+
+%%
+%% Timestamp used in read_n ... may have format:
+%% {{Year,Mon,Day},{Hour,Min,Sec}}
+%% {{Year,Mon,Day},{Hour,Min,Sec},MicroSec}
+%% absolute MicroSeconds since 1970
+%% relative -MicroSeconds since now
+%%
 
 cvt_timestamp(TimeStamp={_Date,_Time}) ->
     S = calendar:datetime_to_gregorian_seconds(TimeStamp),
@@ -449,7 +483,10 @@ cvt_timestamp({Date,Time,Us}) ->
     S = calendar:datetime_to_gregorian_seconds({Date,Time}),
     (S-?UNIX_SECONDS)*1000000+Us;
 cvt_timestamp(TimeStamp) when is_integer(TimeStamp), TimeStamp>=0 ->
-    TimeStamp.
+    TimeStamp;
+cvt_timestamp(TimeStamp) when is_integer(TimeStamp), TimeStamp<0 ->
+    timestamp() + TimeStamp.
+
 
 timestamp() ->
     ?timestamp().

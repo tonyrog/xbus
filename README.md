@@ -58,7 +58,7 @@ Subscribe to meta declaration sent by calling pub_meta. For example
     > xbus:sub_meta("xbus.*.message").
     > xbus:pub_meta("xbus.a.message", [{unit,"mm"}]).
     > flush().
-    > Shell got {xbus_meta,<<"xbus.a.message">>,
+    > Shell got {xbus_meta,<<"xbus.*.message">>,
                       #{timestamp => 1494848025006097,
                       topic => <<"xbus.a.message">>,
                       value => [{unit,"mm"}]}}

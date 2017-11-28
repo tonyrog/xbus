@@ -40,9 +40,7 @@ xbus:timestamp() or tree_db_bin:timestamp() which is in unix micro seconds.
 
 ### xbus:pub_meta(Topic::key(), Data) -> true
 
-pub_meta will publish (and retain) meta information under the
-meta topic <<"{META}.a.topic">>. It is also possible to
-subscribe to <<"{META}.*">> (use sub_meta) to detect declared channels.
+pub_meta will publish (and retain) meta information.
 
     > xbus:pub_meta("a.topic", [{comment,"A comment"},{unit,"%"}]).
 
@@ -60,9 +58,9 @@ Subscribe to meta declaration sent by calling pub_meta. For example
     > xbus:sub_meta("xbus.*.message").
     > xbus:pub_meta("xbus.a.message", [{unit,"mm"}]).
     > flush().
-    > Shell got {xbus,<<"{META}.xbus.a.message">>,
+    > Shell got {xbus_meta,<<"xbus.a.message">>,
                       #{timestamp => 1494848025006097,
-                      topic => <<"{META}.xbus.a.message">>,
+                      topic => <<"xbus.a.message">>,
                       value => [{unit,"mm"}]}}
 
 # Topics
@@ -71,14 +69,6 @@ Patterns in xbus may contain * or ? matching any number of, and
 one, number of components respectivly. The patterns must replace
 a complete component and can not match inside components, so
 *a*.b is not a topic pattern but a.*.b is.
-
-Meta information is stored in the "{META}" sub tree.
-The meta information for topic "a.b.c" may be
-"{META}.a.b.c", [{unit,"m/s"},{retain,100},{persistent,true}].
-Special topic is also "a.b.c.#" which is the current position when
-retain > 1, the retained values are then stored as "a.b.c.0" ... "a.b.c.N"
-and then wrap around as a circular queue. Current values is also stored under
-the normal topic, "a.b.c" in this case.
 
 # Config
 

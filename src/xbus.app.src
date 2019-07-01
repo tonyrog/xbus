@@ -1,7 +1,7 @@
 {application, xbus,
  [
-  {description, ""},
-  {vsn, "1"},
+  {description, "Erlang Message Bus"},
+  {vsn, git},
   {registered, []},
   {applications, [
                   kernel,

@@ -2,6 +2,7 @@
  [
   {description, "Erlang Message Bus"},
   {vsn, git},
+  {modules, ["@@MODULES@@"]},  
   {registered, []},
   {applications, [
                   kernel,

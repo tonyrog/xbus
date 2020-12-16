@@ -30,6 +30,8 @@
 -export([topics/0, topics/1, show_topics/0, show_topics/1]).
 -export([retained/0, retained/1, show_retained/0, show_retained/1]).
 -export([show_q/1]).
+-export([show_value/1, show_value/2]).
+-export([cvt_timestamp/1]).
 -export([datetime_us_from_timestamp/1]).
 -export([send_retained/2]).
 
